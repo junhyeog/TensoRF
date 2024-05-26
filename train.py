@@ -1,20 +1,18 @@
 
-import os
-from tqdm.auto import tqdm
-from opt import config_parser
-
-
-
-import json, random
-from renderer import *
-from utils import *
-from torch.utils.tensorboard import SummaryWriter
 import datetime
-
-from dataLoader import dataset_dict
+import json
+import os
+import random
 import sys
 
+from torch.utils.tensorboard import SummaryWriter
+from tqdm.auto import tqdm
 
+from dataLoader import dataset_dict
+from models.tensoRF import TensorVMSplit
+from opt import config_parser
+from renderer import *
+from utils import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -94,13 +92,13 @@ def reconstruction(args):
     test_dataset = dataset(args.datadir, split='test', downsample=args.downsample_train, is_stack=True)
     white_bg = train_dataset.white_bg
     near_far = train_dataset.near_far
-    ndc_ray = args.ndc_ray
+    ndc_ray = args.ndc_ray # 0
 
     # init resolution
-    upsamp_list = args.upsamp_list
-    update_AlphaMask_list = args.update_AlphaMask_list
-    n_lamb_sigma = args.n_lamb_sigma
-    n_lamb_sh = args.n_lamb_sh
+    upsamp_list = args.upsamp_list # [2000,3000,4000,5500,7000]
+    update_AlphaMask_list = args.update_AlphaMask_list # [2000,4000]
+    n_lamb_sigma = args.n_lamb_sigma #  [16,16,16] = maybe R_σ, set according to The total number of tensor components (#Comp)
+    n_lamb_sh = args.n_lamb_sh #  [48,48,48] = maybe R_c, set according to The total number of tensor components (#Comp)
 
     
     if args.add_timestamp:
@@ -120,16 +118,18 @@ def reconstruction(args):
 
     # init parameters
     # tensorVM, renderer = init_parameters(args, train_dataset.scene_bbox.to(device), reso_list[0])
-    aabb = train_dataset.scene_bbox.to(device)
-    reso_cur = N_to_reso(args.N_voxel_init, aabb)
-    nSamples = min(args.nSamples, cal_n_samples(reso_cur,args.step_ratio))
+    aabb = train_dataset.scene_bbox.to(device) # [2, 3] (xyz_min, xyz_max)
+    # N_voxel_init = 128**3
+    # N_voxel_final = 300**3
+    reso_cur = N_to_reso(args.N_voxel_init, aabb) # [3] (# of voxels in x,y,z)
+    nSamples = min(args.nSamples, cal_n_samples(reso_cur,args.step_ratio)) # # of points per ray (어떻게 계산하는지는 모르겠음)
 
 
     if args.ckpt is not None:
         ckpt = torch.load(args.ckpt, map_location=device)
         kwargs = ckpt['kwargs']
         kwargs.update({'device':device})
-        tensorf = eval(args.model_name)(**kwargs)
+        tensorf: TensorVMSplit = eval(args.model_name)(**kwargs)
         tensorf.load(ckpt)
     else:
         tensorf = eval(args.model_name)(aabb, reso_cur, device,
@@ -158,7 +158,7 @@ def reconstruction(args):
     PSNRs,PSNRs_test = [],[0]
 
     allrays, allrgbs = train_dataset.all_rays, train_dataset.all_rgbs
-    if not args.ndc_ray:
+    if not args.ndc_ray: # ndc_ray =0
         allrays, allrgbs = tensorf.filtering_rays(allrays, allrgbs, bbox_only=True)
     trainingSampler = SimpleSampler(allrays.shape[0], args.batch_size)
 
@@ -315,4 +315,3 @@ if __name__ == '__main__':
         render_test(args)
     else:
         reconstruction(args)
-
